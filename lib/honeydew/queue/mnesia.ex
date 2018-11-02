@@ -49,26 +49,11 @@ defmodule Honeydew.Queue.Mnesia do
   def init(queue_name, [nodes, table_opts, opts]) do
     access_context = Keyword.get(opts, :access_context, :sync_transaction)
 
-    case :mnesia.create_schema(nodes) do
-      :ok -> :ok
-      {:error, {_, {:already_exists, _}}} -> :ok
-    end
+    create_schema(nodes)
+    start_mnesia_across_nodes(nodes)
+    create_queue_table(queue_name, table_opts)
 
-    # assert that mnesia started correctly everywhere?
-    :rpc.multicall(nodes, :mnesia, :start, [])
-
-    table_def =
-      table_opts
-      |> Keyword.put(:type, :ordered_set)
-      |> Keyword.put(:attributes, Job.fields)
-
-    # inspect/1 here becase queue_name can be of the form {:global, poolname}
-    table = ["honeydew", inspect(queue_name)] |> Enum.join("_") |> String.to_atom
-
-    case :mnesia.create_table(table, table_def) do
-      {:atomic, :ok} -> :ok
-      {:aborted, {:already_exists, ^table}} -> :ok
-    end
+    table = get_queue_table_name(queue_name)
 
     :ok = :mnesia.wait_for_tables([table], 15_000)
 
@@ -233,5 +218,37 @@ defmodule Honeydew.Queue.Mnesia do
 
   defp in_progress_match_spec do
     [{Job.job(private: {node(), :_}, _: :_) |> Job.to_record(:_), [], [:"$_"]}]
+  end
+
+  defp create_schema(nodes) do
+    case :mnesia.create_schema(nodes) do
+      :ok -> :ok
+      {:error, {_, {:already_exists, _}}} -> :ok
+    end
+  end
+
+  defp start_mnesia_across_nodes(nodes) do
+    # assert that mnesia started correctly everywhere?
+    :rpc.multicall(nodes, :mnesia, :start, [])
+  end
+
+  @spec get_queue_table_name(Honeydew.queue_name()) :: atom
+  defp get_queue_table_name(queue_name) do
+    # inspect/1 here becase queue_name can be of the form {:global, poolname}
+    ["honeydew", inspect(queue_name)] |> Enum.join("_") |> String.to_atom
+  end
+
+  defp create_queue_table(queue_name, table_opts) do
+    table_def =
+      table_opts
+      |> Keyword.put(:type, :ordered_set)
+      |> Keyword.put(:attributes, Job.fields)
+
+    table = get_queue_table_name(queue_name)
+
+    case :mnesia.create_table(table, table_def) do
+      {:atomic, :ok} -> :ok
+      {:aborted, {:already_exists, ^table}} -> :ok
+    end
   end
 end
